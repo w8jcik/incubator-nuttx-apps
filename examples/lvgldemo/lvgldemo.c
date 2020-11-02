@@ -141,16 +141,26 @@ static FAR void *tick_func(void *data)
 }
 
 #ifndef CONFIG_VIDEO_FB
+#define LONG_RUNS 1
 
 static struct lcd_planeinfo_s pinfo;
 
 static void area_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p)
 {
+#if LONG_RUNS
+  size_t row_byte_width = sizeof(lv_color_int_t) * (area->x2 - area->x1);
+#endif
+
   for (int32_t y = area->y1; y <= area->y2; y++) {
+#if LONG_RUNS
+    pinfo.putrun(y, area->x1, color_p, row_byte_width);
+    color_p += row_byte_width;
+#else
     for (int32_t x = area->x1; x <= area->x2; x++) {
       pinfo.putrun(y, x, color_p, 2);
       color_p++;
     }
+#endif
   }
 
   lv_disp_flush_ready(disp); /* Indicate you are ready with the flushing*/
