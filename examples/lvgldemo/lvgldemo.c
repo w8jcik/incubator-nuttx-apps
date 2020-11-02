@@ -45,6 +45,11 @@
 #include <stdio.h>
 #include <pthread.h>
 #include <time.h>
+#include <errno.h>  // errno
+#include <fcntl.h>  // O_RDWR
+
+#include <sys/ioctl.h>  // ioctl
+#include <nuttx/lcd/lcd_dev.h>  // lcddev_run_s, LCDDEVIO_SETPOWER
 
 #include <lvgl/lvgl.h>
 
@@ -137,6 +142,42 @@ static FAR void *tick_func(void *data)
   return NULL;
 }
 
+#ifndef CONFIG_VIDEO_FB
+#define LONG_RUNS 0
+
+int fd;
+struct lcddev_run_s lcd_putrun;
+
+static void area_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p)
+{
+#if LONG_RUNS
+  size_t row_byte_width = sizeof(lv_color_int_t) * (area->x2 - area->x1);
+#endif
+
+  for (int32_t y = area->y1; y <= area->y2; y++) {
+#if LONG_RUNS
+    lcd_putrun.col = area->x1;
+    lcd_putrun.row = y;
+    lcd_putrun.data = (unsigned char*)color_p;
+    lcd_putrun.npixels = row_byte_width;
+    ioctl(fd, LCDDEVIO_PUTRUN, &lcd_putrun);
+    color_p += row_byte_width;
+#else
+    for (int32_t x = area->x1; x <= area->x2; x++) {
+      lcd_putrun.col = x;
+      lcd_putrun.row = y;
+      lcd_putrun.data = (unsigned char*)color_p;
+      lcd_putrun.npixels = 2;
+      ioctl(fd, LCDDEVIO_PUTRUN, &lcd_putrun);
+      color_p++;
+    }
+#endif
+  }
+
+  lv_disp_flush_ready(disp); /* Indicate you are ready with the flushing*/
+}
+#endif
+
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
@@ -204,13 +245,36 @@ int main(int argc, FAR char *argv[])
 
   /* Display interface initialization */
 
+#ifdef CONFIG_VIDEO_FB
   fbdev_init();
+#else
+  int ret;
+
+  fd = open("/dev/lcd0", O_NONBLOCK);
+  if (fd < 0)
+    {
+      fprintf(stderr, "ERROR: Failed to open %s: %d\n", "/dev/lcd0", errno);
+
+      return EXIT_FAILURE;
+    }
+
+  ret = ioctl(fd, LCDDEVIO_SETPOWER, 25);
+  if (ret < 0)
+    {
+      fprintf(stderr, "ERROR: ioctl(LCDDEVIO_SETPOWER) failed: %d\n", errno);
+      return EXIT_FAILURE;
+    }
+#endif
 
   /* Basic LittlevGL display driver initialization */
 
   lv_disp_buf_init(&disp_buf, buf, NULL, DISPLAY_BUFFER_SIZE);
   lv_disp_drv_init(&disp_drv);
+#ifdef CONFIG_VIDEO_FB
   disp_drv.flush_cb = fbdev_flush;
+#else
+  disp_drv.flush_cb = area_flush;
+#endif
   disp_drv.buffer = &disp_buf;
   lv_disp_drv_register(&disp_drv);
 
